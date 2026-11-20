@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DeckEditor } from '../components/DeckEditor';
-import { getDeck } from '../api/equizapi';
+import { testService } from '../services/test.service';
 import type { DeckOut } from '../types';
 
 const EditTest: React.FC = () => {
@@ -13,19 +13,43 @@ const EditTest: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      setError('Материал идентификаторы көрсетілмеген');
+      setLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
     setLoading(true);
-    getDeck(id)
+    setError(null);
+
+    testService
+      .getDeck(id, controller.signal)
       .then((data) => setDeck(data))
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : 'Материал табылмады')
-      )
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : 'Материал табылмады');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+
+    return () => controller.abort();
   }, [id]);
 
   if (loading) {
     return (
-      <div style={{ minHeight: '100vh', background: '#f6f9fe', padding: 48, textAlign: 'center', color: '#64748b' }}>
+      <div
+        style={{
+          minHeight: '100vh',
+          background: '#f6f9fe',
+          padding: 48,
+          textAlign: 'center',
+          color: '#64748b',
+        }}
+      >
         Жүктелуде...
       </div>
     );
@@ -33,8 +57,17 @@ const EditTest: React.FC = () => {
 
   if (error || !deck) {
     return (
-      <div style={{ minHeight: '100vh', background: '#f6f9fe', padding: 48, textAlign: 'center' }}>
-        <p style={{ color: '#dc2626', marginBottom: 16 }}>{error || 'Материал табылмады'}</p>
+      <div
+        style={{
+          minHeight: '100vh',
+          background: '#f6f9fe',
+          padding: 48,
+          textAlign: 'center',
+        }}
+      >
+        <p style={{ color: '#dc2626', marginBottom: 16 }}>
+          {error || 'Материал табылмады'}
+        </p>
         <button
           type="button"
           onClick={() => navigate('/')}

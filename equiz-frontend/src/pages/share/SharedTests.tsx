@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import type { DeckSummary, QuizAttemptOut } from '../../types';
+import type { DeckSummary, QuizAttemptOut, StudyItemDraft } from '../../types';
 import Layout from '../../components/Layout';
-import { api } from '../api/equizapi' 
+import { testService } from '../../services/test.service';
+import { resultService } from '../../services/result.service';
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return '—';
@@ -38,9 +39,10 @@ const SharedTests: React.FC = () => {
   const [inspectAttempt, setInspectAttempt] = useState<QuizAttemptOut | null>(null);
 
   useEffect(() => {
-    fetch(`${api}/decks`)
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data: DeckSummary[]) => {
+    const controller = new AbortController();
+    testService
+      .listDecks(controller.signal)
+      .then((data) => {
         const mcqDecks = data.filter((d) => d.mcq_count > 0);
         setDecks(mcqDecks);
         const queryDeckId = searchParams.get('deck');
@@ -50,18 +52,20 @@ const SharedTests: React.FC = () => {
           setSelectedDeckId(mcqDecks[0].id);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+      });
+    return () => controller.abort();
   }, [searchParams]);
 
   const loadResults = useCallback(async (deckId: string) => {
     if (!deckId) return;
     setLoadingResults(true);
     try {
-      const res = await fetch(`${api}/decks/${deckId}/results`);
-      if (res.ok) {
-        const data: QuizAttemptOut[] = await res.json();
-        setAttempts(data);
-      }
+      const data = await resultService.getDeckResults(deckId);
+      setAttempts(data);
+    } catch {
+      // ignore error
     } finally {
       setLoadingResults(false);
     }
@@ -89,33 +93,26 @@ const SharedTests: React.FC = () => {
     if (!currentDeck || togglingActive) return;
     setTogglingActive(true);
     try {
-      const fullRes = await fetch(`${api}/decks/${currentDeck.id}`);
-      if (!fullRes.ok) return;
-      const fullDeck = await fullRes.json();
-
-      const updateRes = await fetch(`${api}/decks/${currentDeck.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: fullDeck.title,
-          description: fullDeck.description,
-          is_active: !currentDeck.is_active,
-          settings: fullDeck.settings,
-          items: fullDeck.items.map((i: any) => ({
-            item_type: i.item_type,
-            points: i.points,
-            payload: i.payload,
-          })),
-        }),
+      const fullDeck = await testService.getDeck(currentDeck.id);
+      await testService.updateDeck(currentDeck.id, {
+        title: fullDeck.title,
+        description: fullDeck.description,
+        is_active: !currentDeck.is_active,
+        settings: fullDeck.settings,
+        items: fullDeck.items.map((i: StudyItemDraft) => ({
+          item_type: i.item_type,
+          points: i.points,
+          payload: i.payload,
+        })) as StudyItemDraft[],
       });
 
-      if (updateRes.ok) {
-        setDecks((prev) =>
-          prev.map((d) =>
-            d.id === currentDeck.id ? { ...d, is_active: !d.is_active } : d
-          )
-        );
-      }
+      setDecks((prev) =>
+        prev.map((d) =>
+          d.id === currentDeck.id ? { ...d, is_active: !d.is_active } : d
+        )
+      );
+    } catch {
+      // ignore error
     } finally {
       setTogglingActive(false);
     }

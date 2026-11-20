@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { DeckSummary } from '../types';
 import Layout from '../components/Layout';
-import { api } from '../api/equizapi' 
+import { testService } from '../services/test.service';
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -28,10 +28,15 @@ const Home: React.FC = () => {
   const userName = localStorage.getItem('equiz_user_name') || 'Raim';
 
   useEffect(() => {
-    fetch(`${api}/decks`)
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data: DeckSummary[]) => setDecks(data))
-      .catch(() => {});
+    const controller = new AbortController();
+    testService
+      .listDecks(controller.signal)
+      .then((data) => setDecks(data))
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setErrorMsg(err instanceof Error ? err.message : 'Материалдарды жүктеу мүмкін болмады');
+      });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -56,13 +61,10 @@ const Home: React.FC = () => {
   const handleDeleteDeck = async () => {
     if (!deckToDelete) return;
     try {
-      const response = await fetch(`${api}/decks/${deckToDelete.id}`, {
-        method: 'DELETE',
-      });
-      if (!response.ok) throw new Error('Материалды өшіру мүмкін болмады');
+      await testService.deleteDeck(deckToDelete.id);
       setDecks((prev) => prev.filter((d) => d.id !== deckToDelete.id));
-    } catch {
-      setErrorMsg('Қате: Сервермен байланыс жоқ.');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Қате: Сервермен байланыс жоқ.');
     } finally {
       setDeckToDelete(null);
     }

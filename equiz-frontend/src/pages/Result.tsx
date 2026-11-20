@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import type { QuizAttemptOut } from '../types';
-import { api } from '../api/equizapi' 
+import { resultService } from '../services/result.service';
 
 const Result: React.FC = () => {
   const { resultId } = useParams<{ resultId: string }>();
@@ -10,15 +10,27 @@ const Result: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!resultId) return;
+    if (!resultId) {
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
     setLoading(true);
-    fetch(`${api}/results/${resultId}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: QuizAttemptOut | null) => {
-        if (data) setResult(data);
+
+    resultService
+      .getResult(resultId, controller.signal)
+      .then((data) => setResult(data))
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setResult(null);
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+
+    return () => controller.abort();
   }, [resultId]);
 
   if (loading) {
@@ -42,13 +54,15 @@ const Result: React.FC = () => {
     );
   }
 
-  const percent = result.max_score > 0 ? Math.round((result.score / result.max_score) * 100) : 0;
+  const score = result.score ?? 0;
+  const maxScore = result.max_score ?? 0;
+  const percent = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
   const correctQuestions = result.details.filter((d) => d.is_correct).length;
   const wrongQuestions = result.details.length - correctQuestions;
   const ringRadius = 27;
   const ringCircumference = 2 * Math.PI * ringRadius;
   const ringOffset = ringCircumference * (1 - percent / 100);
-  const formattedDate = new Date(result.created_at).toLocaleString('kk-KZ', {
+  const formattedDate = new Date(result.created_at ?? result.started_at).toLocaleString('kk-KZ', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -246,7 +260,7 @@ const Result: React.FC = () => {
               <span style={{ fontWeight: 700, fontSize: 16, color: '#2563eb' }}>{percent}%</span>
             </div>
             <span className="equiz-stat-label">
-              Ұпай: {result.score} / {result.max_score}
+              Ұпай: {score} / {maxScore}
             </span>
           </div>
 

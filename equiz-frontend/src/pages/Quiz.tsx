@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { QuizAttemptOut, QuizSessionOut } from '../types';
-import { api } from '../api/equizapi' 
+import type { QuizSessionOut, QuizSubmitPayload } from '../types';
+import { testService } from '../services/test.service';
+import { resultService } from '../services/result.service';
 
 function formatTimer(seconds: number): string {
   const mins = Math.floor(seconds / 60);
@@ -26,16 +27,13 @@ const Quiz: React.FC = () => {
 
   useEffect(() => {
     if (!id) return;
+    const controller = new AbortController();
     setLoading(true);
-    fetch(`${api}/decks/${id}/quiz`)
-      .then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || 'Тест табылмады');
-        }
-        return res.json();
-      })
-      .then((data: QuizSessionOut) => {
+    setError(null);
+
+    testService
+      .getQuizSession(id, controller.signal)
+      .then((data) => {
         setSession(data);
         const limitSec = data.settings?.time_limit_sec;
         if (limitSec && limitSec > 0) {
@@ -48,8 +46,17 @@ const Quiz: React.FC = () => {
           setSecondsLeft(Math.max(0, Math.ceil((endAt - Date.now()) / 1000)));
         }
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Қате шықты'))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : 'Тест табылмады');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+
+    return () => controller.abort();
   }, [id]);
 
   const handleSubmit = useCallback(async () => {
@@ -60,23 +67,18 @@ const Quiz: React.FC = () => {
     if (storageKey) sessionStorage.removeItem(storageKey);
 
     try {
-      const payload = {
+      const payload: QuizSubmitPayload = {
         answers: session.items.map((item) => ({
           item_id: item.id,
           selected_keys: answers[item.id] || [],
         })),
       };
-      const res = await fetch(`${api}/decks/${id}/quiz/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Нәтижені жіберу сәтсіз аяқталды');
-      }
-      const attempt: QuizAttemptOut = await res.json();
-      navigate(`/result/${attempt.id}`);
+      const attempt = await resultService.submitPublicAttempt(
+        session.attempt_id,
+        session.session_token ?? '',
+        payload
+      );
+      navigate(`/result/${attempt.id ?? attempt.attempt_id}`);
     } catch (err) {
       autoSubmittedRef.current = false;
       setError(err instanceof Error ? err.message : 'Сервермен байланыс жоқ');

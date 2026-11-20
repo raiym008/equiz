@@ -2,6 +2,7 @@ import os
 import time
 import shutil
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Header
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 import config
@@ -31,6 +32,11 @@ from schemas import (
 )
 
 router = APIRouter(prefix="/api")
+
+
+class AnswerCheckRequest(BaseModel):
+    item_id: str
+    selected_keys: list[str] = []
 
 
 def _deck_to_out(deck: Deck) -> DeckOut:
@@ -367,3 +373,114 @@ def reset_flashcards(deck_id: str, db: Session = Depends(get_db)):
     db.query(FlashcardProgress).filter(FlashcardProgress.deck_id == deck_id).delete()
     db.commit()
     return {"message": "Карточкалар прогресі қалпына келтірілді"}
+
+
+# =====================================================================
+# 3. ҚОСЫМША МАРШРУТТАР (НӘТИЖЕЛЕР, ФЛЕШКАРТАЛАР, ТЕКСЕРУ, ӘКІМШІ ТЕСТІ)
+# =====================================================================
+
+@router.get(
+    "/results",
+    response_model=list[QuizAttemptOut],
+    dependencies=[Depends(require_admin)],
+)
+def list_all_results(db: Session = Depends(get_db)):
+    attempts = (
+        db.query(QuizAttempt)
+        .order_by(QuizAttempt.started_at.desc())
+        .all()
+    )
+    return [format_attempt_out(a) for a in attempts]
+
+
+@router.get("/public/quizzes/{share_code}/flashcards")
+def get_public_flashcards(share_code: str, db: Session = Depends(get_db)):
+    deck = (
+        db.query(Deck)
+        .filter(
+            Deck.share_code == share_code,
+            Deck.is_archived.is_(False),
+            Deck.is_active.is_(True),
+        )
+        .first()
+    )
+    if not deck:
+        raise HTTPException(status_code=404, detail="Тест табылмады")
+
+    return [
+        {
+            "id": item.id,
+            "question": item.payload.get("front", ""),
+            "answer": item.payload.get("back", ""),
+        }
+        for item in deck.items
+        if item.item_type == "flashcard"
+    ]
+
+
+@router.post("/public/attempts/{attempt_id}/check")
+def check_public_answer(
+    attempt_id: str,
+    req: AnswerCheckRequest,
+    x_attempt_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    session = resume_participant_attempt(db, attempt_id, x_attempt_token)
+    item = (
+        db.query(StudyItem)
+        .filter(
+            StudyItem.id == req.item_id,
+            StudyItem.deck_id == session.deck_id,
+            StudyItem.item_type == "mcq",
+        )
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Сұрақ табылмады")
+
+    correct_keys = item.payload.get("correct_keys", [])
+    is_correct = sorted(req.selected_keys) == sorted(correct_keys)
+    return {
+        "item_id": item.id,
+        "is_correct": is_correct,
+        "correct_keys": correct_keys,
+    }
+
+
+@router.get(
+    "/decks/{deck_id}/quiz",
+    response_model=QuizSessionOut,
+    dependencies=[Depends(require_admin)],
+)
+def start_admin_quiz(deck_id: str, db: Session = Depends(get_db)):
+    deck = (
+        db.query(Deck)
+        .filter(Deck.id == deck_id, Deck.is_archived.is_(False))
+        .first()
+    )
+    if not deck:
+        raise HTTPException(status_code=404, detail="Материал табылмады")
+    return start_participant_attempt(db, deck.share_code, "Әкімші")
+
+
+@router.post(
+    "/decks/{deck_id}/quiz/submit",
+    response_model=QuizAttemptOut,
+    dependencies=[Depends(require_admin)],
+)
+def submit_admin_quiz(
+    deck_id: str,
+    req: QuizSubmitRequest,
+    db: Session = Depends(get_db),
+):
+    latest_attempt = (
+        db.query(QuizAttempt)
+        .filter(QuizAttempt.deck_id == deck_id, QuizAttempt.status == "in_progress")
+        .order_by(QuizAttempt.started_at.desc())
+        .first()
+    )
+    if not latest_attempt:
+        raise HTTPException(status_code=404, detail="Белсенді тест сессиясы табылмады")
+    return submit_participant_attempt(
+        db, latest_attempt.id, req, latest_attempt.session_token
+    )

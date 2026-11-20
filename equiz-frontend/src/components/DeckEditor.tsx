@@ -1,11 +1,12 @@
 import React, { useRef, useState } from 'react';
 import type {
+  DeckCreatePayload,
   DeckOut,
   FlashcardDraft,
   McqDraft,
   StudyItemDraft,
 } from '../types';
-import { createDeck, parseDocxFile, updateDeck } from '../api/equizapi';
+import { testService } from '../services/test.service';
 
 interface DeckEditorProps {
   initialDeck?: DeckOut | null;
@@ -58,7 +59,7 @@ export const DeckEditor: React.FC<DeckEditorProps> = ({
 
   const [items, setItems] = useState<StudyItemDraft[]>(
     initialDeck
-      ? (initialDeck.items.map((i) => ({
+      ? (initialDeck.items.map((i: StudyItemDraft) => ({
           item_type: i.item_type,
           points: i.points,
           payload: i.payload,
@@ -78,7 +79,7 @@ export const DeckEditor: React.FC<DeckEditorProps> = ({
     setError(null);
     setParsing(true);
     try {
-      const parsed = await parseDocxFile(file);
+      const parsed = await testService.parseDocxFile(file);
       if (!title.trim()) setTitle(file.name.replace(/\.docx$/i, ''));
       setItems((prev) => {
         const isBlank =
@@ -119,7 +120,7 @@ export const DeckEditor: React.FC<DeckEditorProps> = ({
     }
     const exists = item.payload.correct_keys.includes(key);
     const correct_keys = exists
-      ? item.payload.correct_keys.filter((k) => k !== key)
+      ? item.payload.correct_keys.filter((k: string) => k !== key)
       : [...item.payload.correct_keys, key];
     updateItem(idx, { ...item, payload: { ...item.payload, correct_keys } });
   };
@@ -138,7 +139,7 @@ export const DeckEditor: React.FC<DeckEditorProps> = ({
         ...item,
         payload: {
           ...item.payload,
-          options: { ...item.payload, options: { ...item.payload.options, [key]: editDraft.trim() } }.options,
+          options: { ...item.payload.options, [key]: editDraft.trim() },
         },
       });
     }
@@ -172,7 +173,7 @@ export const DeckEditor: React.FC<DeckEditorProps> = ({
       payload: {
         ...item.payload,
         options: Object.fromEntries(entries),
-        correct_keys: item.payload.correct_keys.filter((k) => k !== keyToRemove),
+        correct_keys: item.payload.correct_keys.filter((k: string) => k !== keyToRemove),
       },
     });
   };
@@ -191,7 +192,7 @@ export const DeckEditor: React.FC<DeckEditorProps> = ({
           setError(`#${i + 1} сұрақтың мәтінін жазыңыз.`);
           return;
         }
-        if (Object.values(it.payload.options).some((v) => !v.trim())) {
+        if ((Object.values(it.payload.options) as string[]).some((v: string) => !v.trim())) {
           setError(`#${i + 1} сұрақтың барлық нұсқасын толтырыңыз.`);
           return;
         }
@@ -207,15 +208,15 @@ export const DeckEditor: React.FC<DeckEditorProps> = ({
 
     setSaving(true);
     try {
-      const payload = {
+      const payload: DeckCreatePayload = {
         title: title.trim(),
         description: null,
         settings: { time_limit_sec: timeLimitMin ? timeLimitMin * 60 : null },
         items,
       };
       const saved = initialDeck
-        ? await updateDeck(initialDeck.id, payload)
-        : await createDeck(payload);
+        ? await testService.updateDeck(initialDeck.id, payload)
+        : await testService.createDeck(payload);
       onSaved?.(saved);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Сақтау кезінде қате шықты');
@@ -827,7 +828,7 @@ export const DeckEditor: React.FC<DeckEditorProps> = ({
                     </div>
 
                     <div className="eq-ce-opts">
-                      {Object.entries(item.payload.options).map(([key, val]) => {
+                      {(Object.entries(item.payload.options) as [string, string][]).map(([key, val]) => {
                         const isCorrect = item.payload.correct_keys.includes(key);
                         const isEditing = editingOpt?.idx === idx && editingOpt?.key === key;
 

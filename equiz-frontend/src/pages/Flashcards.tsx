@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { FlashcardStudyItem } from '../types';
-import { api } from '../api/equizapi' 
+import { questionService } from '../services/question.service';
 
 const Flashcards: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -19,12 +19,7 @@ const Flashcards: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${api}/decks/${id}/flashcards`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Карточкалар табылмады');
-      }
-      const data: FlashcardStudyItem[] = await res.json();
+      const data = await questionService.getDeckFlashcards(id);
       setAllCards(data);
       setQueue(data.filter((c) => c.status !== 'known'));
       setIsFlipped(false);
@@ -45,15 +40,7 @@ const Flashcards: React.FC = () => {
       const current = queue[0];
       setBusy(true);
       try {
-        const res = await fetch(
-          `${api}/decks/${id}/flashcards/${current.id}/mark`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status }),
-          }
-        );
-        if (!res.ok) throw new Error('Күйді сақтау сәтсіз аяқталды');
+        await questionService.markFlashcard(id, current.id, status);
 
         setAllCards((prev) =>
           prev.map((c) => (c.id === current.id ? { ...c, status } : c))
@@ -77,8 +64,10 @@ const Flashcards: React.FC = () => {
     if (!id) return;
     setBusy(true);
     try {
-      await fetch(`${api}/decks/${id}/flashcards/reset`, { method: 'POST' });
+      await questionService.resetFlashcards(id);
       await loadCards();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Қайта бастау сәтсіз аяқталды');
     } finally {
       setBusy(false);
     }

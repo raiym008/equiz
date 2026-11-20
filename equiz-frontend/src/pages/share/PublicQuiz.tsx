@@ -4,8 +4,12 @@ import type {
   SharedQuizInfo,
   QuizSessionOut,
   QuizAttemptOut,
+  PublicFlashcardItem,
+  QuizSubmitPayload,
 } from '../../types';
-import { api } from '../api/equizapi' 
+import { testService } from '../../services/test.service';
+import { questionService } from '../../services/question.service';
+import { resultService } from '../../services/result.service';
 
 interface StoredSession {
   attempt_id: string;
@@ -79,11 +83,11 @@ const PublicQuiz: React.FC = () => {
         const savedRaw = sessionStorage.getItem(storageKey);
         if (savedRaw) {
           const saved: StoredSession = JSON.parse(savedRaw);
-          const resumeRes = await fetch(`${api}/public/attempts/${saved.attempt_id}`, {
-            headers: { 'X-Attempt-Token': saved.session_token },
-          });
-          if (resumeRes.ok) {
-            const resumedSession: QuizSessionOut = await resumeRes.json();
+          try {
+            const resumedSession = await testService.resumePublicAttempt(
+              saved.attempt_id,
+              saved.session_token
+            );
             setSession(resumedSession);
             setToken(saved.session_token);
             setSecondsLeft(resumedSession.remaining_seconds);
@@ -91,17 +95,12 @@ const PublicQuiz: React.FC = () => {
             setLockedSingle(false);
             setStep('testing');
             return;
-          } else {
+          } catch {
             sessionStorage.removeItem(storageKey);
           }
         }
 
-        const infoRes = await fetch(`${api}/public/quizzes/${shareCode}`);
-        if (!infoRes.ok) {
-          const err = await infoRes.json().catch(() => ({}));
-          throw new Error(err.detail || 'Тест сілтемесі табылмады');
-        }
-        const info: SharedQuizInfo = await infoRes.json();
+        const info = await testService.getPublicQuizInfo(shareCode);
         setQuizInfo(info);
         setStep('intro');
       } catch (e: any) {
@@ -148,16 +147,10 @@ const PublicQuiz: React.FC = () => {
     setStarting(true);
     setErrorText('');
     try {
-      const res = await fetch(`${api}/public/quizzes/${shareCode}/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ participant_name: participantName.trim() }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Тестті бастау мүмкін болмады');
-      }
-      const newSession: QuizSessionOut = await res.json();
+      const newSession = await testService.startPublicQuiz(
+        shareCode,
+        participantName.trim()
+      );
       const sessionToken = newSession.session_token || '';
 
       sessionStorage.setItem(
@@ -189,14 +182,10 @@ const PublicQuiz: React.FC = () => {
     setCardIndex(0);
 
     try {
-      const res = await fetch(`${api}/public/quizzes/${shareCode}/flashcards`);
-      if (res.ok) {
-        const data: FlashcardItem[] = await res.json();
-        setFlashcards(data);
-        setStep('flashcards');
-        return;
-      }
-      showToast('Карточкалар режимі жақында қосылады');
+      const data: PublicFlashcardItem[] = await questionService.getPublicFlashcards(shareCode);
+      setFlashcards(data);
+      setStep('flashcards');
+      return;
     } catch {
       showToast('Карточкаларды жүктеу мүмкін болмады');
     } finally {
@@ -212,28 +201,18 @@ const PublicQuiz: React.FC = () => {
     const finalAnswers = overrideAnswers || answers;
 
     try {
-      const payload = {
+      const payload: QuizSubmitPayload = {
         answers: session.items.map((item) => ({
           item_id: item.id,
           selected_keys: finalAnswers[item.id] || [],
         })),
       };
 
-      const res = await fetch(`${api}/public/attempts/${session.attempt_id}/submit`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Attempt-Token': token,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Нәтижені жіберу қатесі');
-      }
-
-      const attemptResult: QuizAttemptOut = await res.json();
+      const attemptResult = await resultService.submitPublicAttempt(
+        session.attempt_id,
+        token,
+        payload
+      );
       sessionStorage.removeItem(storageKey);
       setResult(attemptResult);
       setStep('result');
@@ -270,23 +249,18 @@ const PublicQuiz: React.FC = () => {
       hasAnswerKey = true;
     } else {
       try {
-        const res = await fetch(`${api}/public/attempts/${session.attempt_id}/check`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Attempt-Token': token,
-          },
-          body: JSON.stringify({ item_id: itemId, selected_keys: selectedKeys }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data.correct_keys) && data.correct_keys.length > 0) {
-            correctKeys = data.correct_keys;
-            const sortedSel = [...selectedKeys].sort().join(',');
-            const sortedRight = [...correctKeys].sort().join(',');
-            isCorrect = sortedSel === sortedRight;
-            hasAnswerKey = true;
-          }
+        const data = await questionService.checkPublicAnswer(
+          session.attempt_id,
+          token,
+          itemId,
+          selectedKeys
+        );
+        if (Array.isArray(data.correct_keys) && data.correct_keys.length > 0) {
+          correctKeys = data.correct_keys;
+          const sortedSel = [...selectedKeys].sort().join(',');
+          const sortedRight = [...correctKeys].sort().join(',');
+          isCorrect = sortedSel === sortedRight;
+          hasAnswerKey = true;
         }
       } catch {
         // Серверде /check эндпоинты әлі қосылмаған жағдайда жалған жасыл көрсетпеу
@@ -1364,8 +1338,10 @@ const PublicQuiz: React.FC = () => {
           const totalCount = result.details.length;
           const correctCount = result.details.filter((d) => d.is_correct).length;
           const wrongCount = totalCount - correctCount;
-          const accuracyPct = result.max_score > 0
-            ? Math.round((result.score / result.max_score) * 100)
+          const score = result.score ?? 0;
+          const maxScore = result.max_score ?? 0;
+          const accuracyPct = maxScore > 0
+            ? Math.round((score / maxScore) * 100)
             : 0;
 
           const handleRetry = () => {
@@ -1405,7 +1381,7 @@ const PublicQuiz: React.FC = () => {
                 <div style={{ display: 'flex', gap: 32, alignItems: 'baseline', flexWrap: 'wrap' }}>
                   <div>
                     <div style={{ fontSize: '2.2rem', fontWeight: 900, color: '#2563eb', lineHeight: 1 }}>
-                      {result.score} <span style={{ fontSize: '1.1rem', color: '#64748b', fontWeight: 600 }}>/ {result.max_score}</span>
+                      {score} <span style={{ fontSize: '1.1rem', color: '#64748b', fontWeight: 600 }}>/ {maxScore}</span>
                     </div>
                     <div style={{ fontSize: '0.82rem', color: '#64748b', marginTop: 4 }}>Ұпай</div>
                   </div>

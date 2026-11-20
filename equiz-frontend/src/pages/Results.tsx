@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { QuizAttemptOut } from '../types';
 import Layout from '../components/Layout';
-import { api } from '../api/equizapi' 
+import { resultService } from '../services/result.service';
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
@@ -24,11 +24,20 @@ const Results: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    fetch(`${api}/results`)
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data: QuizAttemptOut[]) => setResults(data))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    const controller = new AbortController();
+    setLoading(true);
+    resultService
+      .listResults(controller.signal)
+      .then((data) => setResults(data))
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -46,10 +55,11 @@ const Results: React.FC = () => {
   const averagePercent =
     totalAttempts > 0
       ? Math.round(
-          results.reduce(
-            (acc, r) => acc + (r.max_score > 0 ? (r.score / r.max_score) * 100 : 0),
-            0
-          ) / totalAttempts
+          results.reduce((acc, r) => {
+            const score = r.score ?? 0;
+            const maxScore = r.max_score ?? 0;
+            return acc + (maxScore > 0 ? (score / maxScore) * 100 : 0);
+          }, 0) / totalAttempts
         )
       : 0;
 
@@ -176,27 +186,32 @@ const Results: React.FC = () => {
               </thead>
               <tbody>
                 {filteredResults.map((res) => {
+                  const resId = res.id ?? res.attempt_id;
+                  const score = res.score ?? 0;
+                  const maxScore = res.max_score ?? 0;
                   const percent =
-                    res.max_score > 0 ? Math.round((res.score / res.max_score) * 100) : 0;
-                  const isSelected = selectedResultId === res.id;
+                    maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
+                  const isSelected = selectedResultId === resId;
                   return (
                     <tr
-                      key={res.id}
+                      key={resId}
                       className={`result-clickable ${isSelected ? 'selected' : ''}`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setSelectedResultId(res.id);
+                        setSelectedResultId(resId);
                       }}
-                      onDoubleClick={() => navigate(`/result/${res.id}`)}
+                      onDoubleClick={() => navigate(`/result/${resId}`)}
                     >
                       <td style={{ fontWeight: 600, color: '#0f172a' }}>{res.deck_title}</td>
                       <td>
-                        <span className="date-text">{formatDateTime(res.created_at)}</span>
+                        <span className="date-text">
+                          {formatDateTime(res.created_at ?? res.started_at)}
+                        </span>
                       </td>
                       <td>
                         <div className="progress-cell">
                           <span className="progress-percent">
-                            {res.score}/{res.max_score}
+                            {score}/{maxScore}
                           </span>
                           <div className="progress-track">
                             <div className="progress-fill" style={{ width: `${percent}%` }} />
@@ -209,7 +224,7 @@ const Results: React.FC = () => {
                           className="btn-detail"
                           onClick={(e) => {
                             e.stopPropagation();
-                            navigate(`/result/${res.id}`);
+                            navigate(`/result/${resId}`);
                           }}
                         >
                           Қарау
